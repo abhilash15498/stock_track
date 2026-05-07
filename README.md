@@ -107,9 +107,3 @@ For local testing, using a small static server is also fine, especially if the b
 - `script.js` - Supabase auth, n8n API calls, search, and watchlist logic
 - `style.css` - page styling and responsive layout
 
-## Notes
-
-- The Supabase publishable key is used in the frontend because this is a browser-based app.
-- The n8n workflows are not included in this repo.
-- The app depends on the n8n webhook URLs being active.
-- The daily email summary is handled by n8n, so the frontend only shows that the feature exists.
