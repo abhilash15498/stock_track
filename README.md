@@ -2,8 +2,6 @@
 
 StockTrack is a simple stock watchlist web app. It lets a user sign up, log in, browse/search stocks, add stocks to a personal watchlist, remove them later, and get a daily stock summary by email.
 
-![StockTrack Screenshot](./frontend/image.png)
-
 The frontend is a static site; stock data and email summaries are served by the FastAPI backend in `backend/`.
 
 ## What It Uses
