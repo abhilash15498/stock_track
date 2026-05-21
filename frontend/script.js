@@ -1,7 +1,13 @@
-const SUPABASE_URL = "https://nnldrwstsqnqnxlhvapr.supabase.co";
-const SUPABASE_KEY = "sb_publishable_EncUpSHAZ_gEjsNrTIyhQQ_UnVcDyWp";
-const TOP_STOCKS_API = "https://shrikrishnarp.app.n8n.cloud/webhook/top-stocks";
-const SEARCH_STOCKS_API = "https://shrikrishnarp.app.n8n.cloud/webhook/search-stock";
+const SUPABASE_URL = "https://zbrvppyhusrjpdpudzrl.supabase.co";
+const SUPABASE_KEY = "sb_publishable_1WpZzKGTEyLyHY8JguNXjg_dFgyazGB";
+
+// Dynamically determine the backend URL
+const BACKEND_URL = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+    ? "http://localhost:8000"
+    : "https://your-deployed-backend.onrender.com"; // TODO: Replace with your actual deployed backend URL
+
+const TOP_STOCKS_API = `${BACKEND_URL}/top-stocks`;
+const SEARCH_STOCKS_API = `${BACKEND_URL}/search-stock`;
 
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const state = {
@@ -212,6 +218,16 @@ function createAvailableStockCard(stock) {
     change.className = getChangeClass(stock);
     change.textContent = formatChange(stock);
 
+    stockInfo.append(title, price, change);
+
+    if (stock.prediction) {
+        const predictionEl = document.createElement("p");
+        predictionEl.className = `stock-prediction ${stock.prediction.direction.toLowerCase()}`;
+        const dirSymbol = stock.prediction.direction === "UP" ? "▲" : "▼";
+        predictionEl.textContent = `Forecast: Rs. ${stock.prediction.predictedClose.toFixed(2)} (${dirSymbol} ${stock.prediction.percentChange.toFixed(2)}%)`;
+        stockInfo.appendChild(predictionEl);
+    }
+
     button.className = `btn btn-add${isAdded ? " added" : ""}`;
     button.type = "button";
     button.dataset.action = "add";
@@ -219,7 +235,6 @@ function createAvailableStockCard(stock) {
     button.disabled = isAdded;
     button.textContent = isAdded ? "Added" : "+ Add";
 
-    stockInfo.append(title, price, change);
     card.append(stockInfo, button);
 
     return card;
@@ -353,6 +368,29 @@ function createWatchlistCard(symbol) {
     card.className = "stock-card watchlist-card";
     stockInfo.className = "stock-info";
     title.textContent = symbol;
+    stockInfo.appendChild(title);
+
+    // Look up stock info from available stocks to display price and prediction
+    const stock = state.availableStocks.find(s => s.symbol === symbol);
+    if (stock) {
+        const price = document.createElement("p");
+        price.className = "stock-price";
+        price.textContent = formatPrice(stock.price);
+
+        const change = document.createElement("p");
+        change.className = getChangeClass(stock);
+        change.textContent = formatChange(stock);
+
+        stockInfo.append(price, change);
+
+        if (stock.prediction) {
+            const predictionEl = document.createElement("p");
+            predictionEl.className = `stock-prediction ${stock.prediction.direction.toLowerCase()}`;
+            const dirSymbol = stock.prediction.direction === "UP" ? "▲" : "▼";
+            predictionEl.textContent = `Forecast: Rs. ${stock.prediction.predictedClose.toFixed(2)} (${dirSymbol} ${stock.prediction.percentChange.toFixed(2)}%)`;
+            stockInfo.appendChild(predictionEl);
+        }
+    }
 
     button.className = "btn btn-danger";
     button.type = "button";
@@ -360,7 +398,6 @@ function createWatchlistCard(symbol) {
     button.dataset.symbol = symbol;
     button.textContent = "Remove";
 
-    stockInfo.appendChild(title);
     card.append(stockInfo, button);
 
     return card;
@@ -460,6 +497,11 @@ function normalizeStocks(data) {
             symbol: normalizeSymbol(stock.symbol),
             price: toNumber(stock.price),
             previousClose: toNumber(stock.previousClose),
+            prediction: stock.prediction ? {
+                predictedClose: toNumber(stock.prediction.predictedClose),
+                direction: String(stock.prediction.direction || ""),
+                percentChange: toNumber(stock.prediction.percentChange)
+            } : null
         }))
         .filter((stock) => stock.symbol);
 }

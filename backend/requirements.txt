@@ -1,0 +1,9 @@
+fastapi>=0.100.0
+uvicorn>=0.22.0
+yfinance>=0.2.20
+pandas>=2.0.0
+supabase>=1.0.0
+python-dotenv>=1.0.0
+apscheduler>=3.10.0
+scikit-learn>=1.0.0
+joblib>=1.2.0
