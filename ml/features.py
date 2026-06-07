@@ -60,6 +60,7 @@ def save_model_bundle(model, feature_columns: list[str], trained_symbols: list[s
             "trained_symbols": trained_symbols,
         },
         MODEL_PATH,
+        compress=3,
     )
 
 
