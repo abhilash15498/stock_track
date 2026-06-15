@@ -17,7 +17,7 @@ backend/.env
 
 # Machine Learning generated files
 ml/stock_data.csv
-# ml/stock_model.joblib
+ml/stock_model.joblib
 ml/predictions.csv
 ml/predictions.json
 
