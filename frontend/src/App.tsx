@@ -4,6 +4,7 @@ import type { User } from '@supabase/supabase-js';
 import { SUPABASE_URL, SUPABASE_KEY, BACKEND_URL } from './config';
 import HeroFuturistic from './components/ui/hero-futuristic';
 import AuthPage from './components/ui/auth-page';
+import { FallingCurrencyPattern } from './components/ui/falling-currency-pattern';
 import {
   Search,
   Mail,
@@ -349,6 +350,7 @@ export default function App() {
     <div style={{ minHeight: '100vh', background: '#020617', color: '#f0f6ff', display: 'flex', flexDirection: 'column', fontFamily: "'Inter', system-ui, sans-serif" }}>
       {/* Animated background */}
       <div className="animated-bg" />
+      <FallingCurrencyPattern />
       <div className="grid-overlay" />
 
       {/* ===== NAVBAR ===== */}

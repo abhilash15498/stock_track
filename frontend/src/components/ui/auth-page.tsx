@@ -119,6 +119,8 @@ const FEATURES = [
   },
 ];
 
+import { FallingCurrencyPattern } from './falling-currency-pattern';
+
 export default function AuthPage({
   authMode,
   authEmail,
@@ -142,6 +144,7 @@ export default function AuthPage({
       background: '#060912',
       fontFamily: "'Inter', system-ui, sans-serif",
     }}>
+      <FallingCurrencyPattern />
 
       {/* ===== LEFT PANEL — Brand ===== */}
       <div style={{

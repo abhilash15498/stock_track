@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef } from 'react';
 import { TrendingUp, TrendingDown, Sparkles, ArrowRight, BarChart3, Bell, Shield, Check, Zap, Crown } from 'lucide-react';
+import Globe from 'react-globe.gl';
 
 interface HeroFuturisticProps {
   onExplore: () => void;
@@ -64,385 +65,107 @@ const FINANCIAL_CENTERS: GeoPoint[] = [
   { lat: 22.32, lon: 114.17, label: 'Hong Kong', currency: 'HK$', color: '#f87171' },
 ];
 
-function latLonToXYZ(lat: number, lon: number, rotY: number, rotX: number, r: number) {
-  const phi = (90 - lat) * (Math.PI / 180);
-  const theta = (lon + 180) * (Math.PI / 180);
-  const x = -r * Math.sin(phi) * Math.cos(theta);
-  const y = r * Math.cos(phi);
-  const z = r * Math.sin(phi) * Math.sin(theta);
-  // Rotate around Y axis
-  const cosY = Math.cos(rotY), sinY = Math.sin(rotY);
-  const x1 = x * cosY - z * sinY;
-  const z1 = x * sinY + z * cosY;
-  // Rotate around X axis
-  const cosX = Math.cos(rotX), sinX = Math.sin(rotX);
-  const y2 = y * cosX - z1 * sinX;
-  const z2 = y * sinX + z1 * cosX;
-  return { x: x1, y: y2, z: z2 };
-}
-
 const InteractiveGlobe = () => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const rotY = useRef(0.3);
-  const rotX = useRef(0.15);
-  const dragging = useRef(false);
-  const lastMouse = useRef({ x: 0, y: 0 });
-  const autoRotate = useRef(true);
-  const hoveredIdx = useRef<number | null>(null);
-  const [tooltip, setTooltip] = useState<{ x: number; y: number; label: string; currency: string; color: string } | null>(null);
-  const rafId = useRef<number>(0);
+  const globeEl = useRef<any>(null);
 
-  const draw = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    const W = canvas.width, H = canvas.height;
-    const cx = W / 2, cy = H / 2;
-    const R = Math.min(W, H) * 0.38;
-
-    ctx.clearRect(0, 0, W, H);
-
-    // --- Atmosphere glow ---
-    const atmo = ctx.createRadialGradient(cx, cy, R * 0.85, cx, cy, R * 1.18);
-    atmo.addColorStop(0, 'rgba(59,130,246,0.08)');
-    atmo.addColorStop(0.6, 'rgba(59,130,246,0.04)');
-    atmo.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = atmo;
-    ctx.beginPath(); ctx.arc(cx, cy, R * 1.18, 0, Math.PI * 2); ctx.fill();
-
-    // --- Globe body ---
-    const bodyGrad = ctx.createRadialGradient(cx - R * 0.2, cy - R * 0.2, R * 0.05, cx, cy, R);
-    bodyGrad.addColorStop(0, 'rgba(20,30,58,0.95)');
-    bodyGrad.addColorStop(0.5, 'rgba(10,16,40,0.97)');
-    bodyGrad.addColorStop(1, 'rgba(5,8,25,0.99)');
-    ctx.fillStyle = bodyGrad;
-    ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.fill();
-
-    // Clip to sphere
-    ctx.save();
-    ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.clip();
-
-    // --- Lat/Lon grid lines ---
-    ctx.lineWidth = 0.5;
-    // Latitude circles
-    for (let lat = -75; lat <= 75; lat += 15) {
-      const pts: { x: number; y: number; z: number }[] = [];
-      for (let lon = -180; lon <= 180; lon += 4) {
-        pts.push(latLonToXYZ(lat, lon, rotY.current, rotX.current, R));
-      }
-      ctx.beginPath();
-      let first = true;
-      pts.forEach(p => {
-        const sx = cx + p.x, sy = cy - p.y;
-        if (p.z > 0) {
-          if (first) ctx.moveTo(sx, sy);
-          else ctx.lineTo(sx, sy);
-          first = false;
-        } else {
-          first = true;
-        }
-      });
-      ctx.strokeStyle = 'rgba(59,130,246,0.09)';
-      ctx.stroke();
+  const handleGlobeReady = () => {
+    if (globeEl.current) {
+      const controls = globeEl.current.controls();
+      controls.autoRotate = true;
+      controls.autoRotateSpeed = 0.6;
+      controls.enableZoom = false;
+      controls.enablePan = false;
+      controls.minPolarAngle = Math.PI * 0.2;
+      controls.maxPolarAngle = Math.PI * 0.8;
     }
-    // Longitude lines
-    for (let lon = -180; lon < 180; lon += 20) {
-      const pts: { x: number; y: number; z: number }[] = [];
-      for (let lat = -90; lat <= 90; lat += 3) {
-        pts.push(latLonToXYZ(lat, lon, rotY.current, rotX.current, R));
-      }
-      ctx.beginPath();
-      let first = true;
-      pts.forEach(p => {
-        const sx = cx + p.x, sy = cy - p.y;
-        if (p.z > 0) {
-          if (first) ctx.moveTo(sx, sy);
-          else ctx.lineTo(sx, sy);
-          first = false;
-        } else {
-          first = true;
-        }
-      });
-      ctx.strokeStyle = 'rgba(59,130,246,0.06)';
-      ctx.stroke();
-    }
-
-    // --- Continent dots (randomly seeded, stable) ---
-    // We use a simple dot distribution representing continents
-    const LAND_COORDS = [
-      // North America
-      ...Array.from({ length: 40 }, (_, i) => ({ lat: 35 + Math.sin(i * 1.7) * 18, lon: -95 + Math.cos(i * 2.1) * 35 })),
-      // Europe
-      ...Array.from({ length: 28 }, (_, i) => ({ lat: 50 + Math.sin(i * 1.3) * 8, lon: 15 + Math.cos(i * 1.9) * 18 })),
-      // Asia
-      ...Array.from({ length: 55 }, (_, i) => ({ lat: 40 + Math.sin(i * 0.9) * 20, lon: 90 + Math.cos(i * 1.1) * 40 })),
-      // South America
-      ...Array.from({ length: 25 }, (_, i) => ({ lat: -15 + Math.sin(i * 1.4) * 18, lon: -55 + Math.cos(i * 1.7) * 15 })),
-      // Africa
-      ...Array.from({ length: 30 }, (_, i) => ({ lat: 5 + Math.sin(i * 1.2) * 25, lon: 20 + Math.cos(i * 1.5) * 20 })),
-      // Australia
-      ...Array.from({ length: 15 }, (_, i) => ({ lat: -28 + Math.sin(i * 1.6) * 8, lon: 135 + Math.cos(i * 2) * 12 })),
-      // India
-      ...Array.from({ length: 14 }, (_, i) => ({ lat: 20 + Math.sin(i * 1.5) * 8, lon: 80 + Math.cos(i * 1.3) * 8 })),
-    ];
-    LAND_COORDS.forEach(({ lat, lon }) => {
-      const p = latLonToXYZ(lat, lon, rotY.current, rotX.current, R);
-      if (p.z < 0) return;
-      const bright = 0.3 + (p.z / R) * 0.4;
-      const sx = cx + p.x, sy = cy - p.y;
-      ctx.beginPath();
-      ctx.arc(sx, sy, 1.3, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(96,165,250,${bright * 0.55})`;
-      ctx.fill();
-    });
-
-    ctx.restore(); // End clip
-
-    // --- Globe rim ---
-    ctx.beginPath();
-    ctx.arc(cx, cy, R, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(59,130,246,0.18)';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-
-    // Specular highlight
-    const hiGrad = ctx.createRadialGradient(cx - R * 0.35, cy - R * 0.35, 0, cx - R * 0.1, cy - R * 0.1, R * 0.65);
-    hiGrad.addColorStop(0, 'rgba(255,255,255,0.05)');
-    hiGrad.addColorStop(1, 'rgba(255,255,255,0)');
-    ctx.fillStyle = hiGrad;
-    ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.fill();
-
-    // --- Financial center markers ---
-    FINANCIAL_CENTERS.forEach((fc, idx) => {
-      const p = latLonToXYZ(fc.lat, fc.lon, rotY.current, rotX.current, R);
-      if (p.z <= 0) return; // Behind globe
-      const visibility = p.z / R;
-      const sx = cx + p.x;
-      const sy = cy - p.y;
-      const isHovered = hoveredIdx.current === idx;
-      const dotR = isHovered ? 6.5 : 4.5;
-
-      // Pulse ring
-      if (visibility > 0.25) {
-        ctx.beginPath();
-        ctx.arc(sx, sy, dotR + 5 + Math.sin(Date.now() / 700 + idx) * 2.5, 0, Math.PI * 2);
-        ctx.strokeStyle = `${fc.color}${Math.floor(visibility * 35).toString(16).padStart(2, '0')}`;
-        ctx.lineWidth = 1;
-        ctx.stroke();
-      }
-
-      // Dot
-      const grd = ctx.createRadialGradient(sx - 1, sy - 1, 0, sx, sy, dotR);
-      grd.addColorStop(0, '#ffffff');
-      grd.addColorStop(0.4, fc.color);
-      grd.addColorStop(1, `rgba(${hexToRgb(fc.color)},0.53)`);
-      ctx.beginPath();
-      ctx.arc(sx, sy, dotR, 0, Math.PI * 2);
-      ctx.fillStyle = grd;
-      ctx.globalAlpha = 0.4 + visibility * 0.6;
-      ctx.fill();
-      ctx.globalAlpha = 1;
-
-      // Currency label
-      if (visibility > 0.35) {
-        const labelAlpha = Math.min(1, (visibility - 0.35) / 0.4);
-        ctx.font = `bold ${isHovered ? 13 : 11}px 'Space Grotesk', Inter, sans-serif`;
-        ctx.textAlign = 'left';
-        const lx = sx + dotR + 5;
-        const ly = sy + 4;
-
-        // Shadow for readability
-        ctx.fillStyle = `rgba(0,0,0,${labelAlpha * 0.7})`;
-        ctx.fillText(fc.currency, lx + 1, ly + 1);
-
-        ctx.fillStyle = `rgba(${hexToRgb(fc.color)},${labelAlpha})`;
-        ctx.fillText(fc.currency, lx, ly);
-      }
-    });
-  }, []);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    canvas.width = 480;
-    canvas.height = 480;
-
-    const loop = () => {
-      if (autoRotate.current && !dragging.current) {
-        rotY.current += 0.003;
-      }
-      draw();
-      rafId.current = requestAnimationFrame(loop);
-    };
-    loop();
-
-    // Mouse events
-    const onDown = (e: MouseEvent) => {
-      dragging.current = true;
-      autoRotate.current = false;
-      lastMouse.current = { x: e.clientX, y: e.clientY };
-    };
-    const onMove = (e: MouseEvent) => {
-      const rect = canvas.getBoundingClientRect();
-      const mx = (e.clientX - rect.left) * (canvas.width / rect.width);
-      const my = (e.clientY - rect.top) * (canvas.height / rect.height);
-
-      if (dragging.current) {
-        const dx = e.clientX - lastMouse.current.x;
-        const dy = e.clientY - lastMouse.current.y;
-        rotY.current += dx * 0.006;
-        rotX.current = Math.max(-1.2, Math.min(1.2, rotX.current - dy * 0.006));
-        lastMouse.current = { x: e.clientX, y: e.clientY };
-      }
-
-      // Hover detection
-      const W = canvas.width, H = canvas.height;
-      const cx = W / 2, cy = H / 2;
-      const R = Math.min(W, H) * 0.38;
-      let found: number | null = null;
-      FINANCIAL_CENTERS.forEach((fc, idx) => {
-        const p = latLonToXYZ(fc.lat, fc.lon, rotY.current, rotX.current, R);
-        if (p.z <= 0) return;
-        const sx = cx + p.x, sy = cy - p.y;
-        const dist = Math.hypot(mx - sx, my - sy);
-        if (dist < 12) found = idx;
-      });
-      hoveredIdx.current = found;
-      if (found !== null) {
-        const fc = FINANCIAL_CENTERS[found];
-        const W2 = canvas.width, H2 = canvas.height;
-        const cx2 = W2 / 2, cy2 = H2 / 2;
-        const R2 = Math.min(W2, H2) * 0.38;
-        const p = latLonToXYZ(fc.lat, fc.lon, rotY.current, rotX.current, R2);
-        const scaleX = rect.width / canvas.width;
-        const scaleY = rect.height / canvas.height;
-        setTooltip({
-          x: rect.left + (cx2 + p.x) * scaleX,
-          y: rect.top + (cy2 - p.y) * scaleY - 50,
-          label: fc.label,
-          currency: fc.currency,
-          color: fc.color,
-        });
-      } else {
-        setTooltip(null);
-      }
-    };
-    const onUp = () => {
-      dragging.current = false;
-      setTimeout(() => { autoRotate.current = true; }, 2500);
-    };
-    const onLeave = () => {
-      dragging.current = false;
-      hoveredIdx.current = null;
-      setTooltip(null);
-      setTimeout(() => { autoRotate.current = true; }, 1500);
-    };
-
-    // Touch events
-    const onTouchStart = (e: TouchEvent) => {
-      dragging.current = true;
-      autoRotate.current = false;
-      lastMouse.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-    };
-    const onTouchMove = (e: TouchEvent) => {
-      if (!dragging.current) return;
-      e.preventDefault();
-      const dx = e.touches[0].clientX - lastMouse.current.x;
-      const dy = e.touches[0].clientY - lastMouse.current.y;
-      rotY.current += dx * 0.006;
-      rotX.current = Math.max(-1.2, Math.min(1.2, rotX.current - dy * 0.006));
-      lastMouse.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-    };
-    const onTouchEnd = () => { dragging.current = false; setTimeout(() => { autoRotate.current = true; }, 2500); };
-
-    canvas.addEventListener('mousedown', onDown);
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    canvas.addEventListener('mouseleave', onLeave);
-    canvas.addEventListener('touchstart', onTouchStart, { passive: false });
-    canvas.addEventListener('touchmove', onTouchMove, { passive: false });
-    canvas.addEventListener('touchend', onTouchEnd);
-
-    return () => {
-      cancelAnimationFrame(rafId.current);
-      canvas.removeEventListener('mousedown', onDown);
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-      canvas.removeEventListener('mouseleave', onLeave);
-      canvas.removeEventListener('touchstart', onTouchStart);
-      canvas.removeEventListener('touchmove', onTouchMove);
-      canvas.removeEventListener('touchend', onTouchEnd);
-    };
-  }, [draw]);
+  };
 
   return (
-    <div style={{ position: 'relative', width: '100%', maxWidth: '480px', margin: '0 auto' }}>
-      <canvas
-        ref={canvasRef}
-        style={{
-          width: '100%', height: 'auto',
-          cursor: 'grab',
-          display: 'block',
-          filter: 'drop-shadow(0 0 60px rgba(59,130,246,0.25))',
+    <div style={{ position: 'relative', width: '100%', maxWidth: '480px', margin: '0 auto', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+      {/* Atmospheric glow ring */}
+      <div style={{
+        position: 'absolute',
+        top: '50%', left: '50%',
+        transform: 'translate(-50%, -50%)',
+        width: '420px', height: '420px',
+        borderRadius: '50%',
+        background: 'radial-gradient(circle, transparent 47%, rgba(59,130,246,0.12) 55%, rgba(16,185,129,0.06) 65%, transparent 72%)',
+        pointerEvents: 'none',
+        zIndex: 1,
+      }} />
+      <Globe
+        ref={globeEl}
+        width={480}
+        height={480}
+        globeImageUrl="//unpkg.com/three-globe/example/img/earth-night.jpg"
+        bumpImageUrl="//unpkg.com/three-globe/example/img/earth-topology.png"
+        atmosphereColor="rgba(59,130,246,0.6)"
+        atmosphereAltitude={0.18}
+        backgroundColor="rgba(0,0,0,0)"
+        onGlobeReady={handleGlobeReady}
+        htmlElementsData={FINANCIAL_CENTERS}
+        htmlAltitude={0.01}
+        htmlElement={(d: any) => {
+          const el = document.createElement('div');
+          el.innerHTML = `
+            <div style="
+              display: flex; flex-direction: column; align-items: center; cursor: pointer;
+              transform: translate(-50%, -50%);
+              pointer-events: auto;
+              transition: transform 0.2s;
+            ">
+              <div style="
+                width: 9px; height: 9px; border-radius: 50%;
+                background: ${d.color}; box-shadow: 0 0 10px ${d.color}, 0 0 20px ${d.color}55;
+                border: 2px solid rgba(255,255,255,0.9);
+                animation: pulse-dot 2s ease-in-out infinite;
+              "></div>
+              <div style="
+                margin-top: 5px; padding: 2px 7px; border-radius: 5px;
+                background: rgba(2,6,23,0.9); border: 1px solid ${d.color}66;
+                color: ${d.color}; font-size: 10.5px; font-weight: 800; white-space: nowrap;
+                backdrop-filter: blur(8px); font-family: 'Space Grotesk', sans-serif;
+                letter-spacing: 0.03em;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+              ">
+                ${d.currency} ${d.label}
+              </div>
+            </div>
+          `;
+          return el;
         }}
-        title="Drag to rotate"
       />
-      {/* Tooltip */}
-      {tooltip && (
-        <div style={{
-          position: 'fixed',
-          left: tooltip.x,
-          top: tooltip.y,
-          transform: 'translateX(-50%)',
-          background: 'rgba(10,16,31,0.95)',
-          border: `1px solid ${tooltip.color}55`,
-          borderRadius: '10px',
-          padding: '0.45rem 0.9rem',
-          pointerEvents: 'none',
-          zIndex: 9999,
-          backdropFilter: 'blur(12px)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.5rem',
-          boxShadow: `0 8px 30px rgba(0,0,0,0.5), 0 0 20px ${tooltip.color}22`,
-          whiteSpace: 'nowrap',
-        }}>
-          <span style={{ fontSize: '1.1rem', fontWeight: 800, color: tooltip.color }}>{tooltip.currency}</span>
-          <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#e2e8f0' }}>{tooltip.label}</span>
-        </div>
-      )}
       {/* Drag hint */}
       <p style={{
-        textAlign: 'center', marginTop: '0.75rem',
-        fontSize: '0.7rem', color: '#334155',
-        letterSpacing: '0.08em', textTransform: 'uppercase', fontWeight: 600,
+        textAlign: 'center', marginTop: '0.5rem',
+        fontSize: '0.65rem', color: '#334155',
+        letterSpacing: '0.1em', textTransform: 'uppercase', fontWeight: 600,
+        pointerEvents: 'none',
       }}>
         ↻ Drag to rotate
       </p>
+      <style>{`
+        @keyframes pulse-dot {
+          0%, 100% { transform: scale(1); opacity: 1; }
+          50% { transform: scale(1.4); opacity: 0.7; }
+        }
+      `}</style>
     </div>
   );
-};
 
-// Helper to extract RGB from hex
-function hexToRgb(hex: string): string {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `${r},${g},${b}`;
-}
+};
 
 // ─────────────────────────────────────────────────────────
 // TICKER DATA
 // ─────────────────────────────────────────────────────────
 const TICKER_DATA = [
-  { symbol: 'AAPL', price: '194.82', change: '+1.24%', up: true },
-  { symbol: 'MSFT', price: '418.35', change: '+0.87%', up: true },
-  { symbol: 'GOOGL', price: '176.50', change: '-0.34%', up: false },
-  { symbol: 'TSLA', price: '251.14', change: '+2.18%', up: true },
-  { symbol: 'NVDA', price: '127.25', change: '+3.42%', up: true },
-  { symbol: 'META', price: '558.30', change: '-0.95%', up: false },
-  { symbol: 'AMZN', price: '198.40', change: '+1.07%', up: true },
+  { symbol: 'AAPL', price: '$194.82', change: '+1.24%', up: true },
+  { symbol: 'MSFT', price: '$418.35', change: '+0.87%', up: true },
+  { symbol: 'GOOGL', price: '$176.50', change: '-0.34%', up: false },
+  { symbol: 'TSLA', price: '$251.14', change: '+2.18%', up: true },
+  { symbol: 'NVDA', price: '$127.25', change: '+3.42%', up: true },
+  { symbol: 'META', price: '$558.30', change: '-0.95%', up: false },
+  { symbol: 'AMZN', price: '$198.40', change: '+1.07%', up: true },
   { symbol: 'RELIANCE.NS', price: '₹2,847', change: '+0.63%', up: true },
   { symbol: 'TCS.NS', price: '₹3,892', change: '-0.41%', up: false },
   { symbol: 'INFOSYS.NS', price: '₹1,648', change: '+1.15%', up: true },
@@ -504,9 +227,12 @@ const PLANS = [
 // ─────────────────────────────────────────────────────────
 // MAIN COMPONENT
 // ─────────────────────────────────────────────────────────
+import { FallingCurrencyPattern } from './falling-currency-pattern';
+
 export default function HeroFuturistic({ onExplore }: HeroFuturisticProps) {
   return (
     <div style={{ minHeight: '100vh', background: '#020617', color: '#f0f6ff', overflowX: 'hidden', fontFamily: "'Inter', system-ui, sans-serif" }}>
+      <FallingCurrencyPattern />
       <div className="animated-bg" />
       <div className="grid-overlay" />
 
@@ -812,35 +538,76 @@ export default function HeroFuturistic({ onExplore }: HeroFuturisticProps) {
           STOCK PREVIEW
       ═══════════════════════════════════════════════ */}
       <section style={{ position: 'relative', zIndex: 2, maxWidth: '1100px', margin: '0 auto', padding: '0 1.5rem 5rem' }}>
-        <div style={{ background: 'rgba(10,16,31,0.6)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '24px', padding: '2rem', backdropFilter: 'blur(24px)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
-            <div>
-              <h3 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.2rem', color: '#f0f6ff' }}>Sample Dashboard Preview</h3>
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginTop: '0.25rem' }}>Sign in to see your personalized watchlist</p>
+        <div style={{ background: 'rgba(10,16,31,0.6)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '24px', padding: '2rem', backdropFilter: 'blur(24px)', position: 'relative', overflow: 'hidden' }}>
+
+          {/* ── Floating currency background symbols ── */}
+          {[
+            { s: '$',  x: 8,  y: 15, size: 4.5, color: '#34d399', delay: 0   },
+            { s: '₹',  x: 18, y: 60, size: 3.8, color: '#f87171', delay: 2   },
+            { s: '€',  x: 30, y: 25, size: 5.2, color: '#60a5fa', delay: 4   },
+            { s: '¥',  x: 45, y: 70, size: 4.0, color: '#a78bfa', delay: 1   },
+            { s: '£',  x: 60, y: 20, size: 3.5, color: '#fb923c', delay: 3   },
+            { s: '₿',  x: 72, y: 55, size: 4.8, color: '#facc15', delay: 5   },
+            { s: '$',  x: 82, y: 10, size: 3.2, color: '#f87171', delay: 2.5 },
+            { s: '₹',  x: 90, y: 75, size: 4.2, color: '#34d399', delay: 1.5 },
+            { s: '€',  x: 5,  y: 80, size: 3.0, color: '#60a5fa', delay: 3.5 },
+            { s: '¥',  x: 55, y: 40, size: 5.0, color: '#a78bfa', delay: 0.5 },
+            { s: '£',  x: 38, y: 85, size: 3.3, color: '#fb923c', delay: 4.5 },
+            { s: '₿',  x: 95, y: 45, size: 3.8, color: '#facc15', delay: 2.2 },
+          ].map((item, i) => (
+            <div
+              key={i}
+              style={{
+                position: 'absolute',
+                left: `${item.x}%`,
+                top: `${item.y}%`,
+                fontSize: `${item.size}rem`,
+                fontWeight: 900,
+                color: item.color,
+                opacity: 0.12,
+                fontFamily: "'Space Grotesk', 'Inter', sans-serif",
+                userSelect: 'none',
+                pointerEvents: 'none',
+                animation: `floatCurrency ${8 + i * 0.7}s ease-in-out ${item.delay}s infinite`,
+                lineHeight: 1,
+                zIndex: 0,
+              }}
+            >
+              {item.s}
             </div>
-            <button className="btn-primary" onClick={onExplore} id="preview-get-started">Get Started <ArrowRight className="w-4 h-4" /></button>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '1rem' }}>
-            {TICKER_DATA.slice(0, 6).map((t, i) => (
-              <div key={i} className="stock-card">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <div>
-                    <span style={{ fontSize: '0.62rem', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase', background: 'rgba(255,255,255,0.05)', padding: '2px 6px', borderRadius: '4px' }}>
-                      {t.symbol.includes('.NS') ? 'NSE' : 'NASDAQ'}
-                    </span>
-                    <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 800, fontSize: '1rem', color: '#f0f6ff', marginTop: '0.35rem' }}>{t.symbol}</div>
-                  </div>
-                  <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '0.22rem 0.55rem', borderRadius: '6px', background: t.up ? 'rgba(16,185,129,0.1)' : 'rgba(244,63,94,0.1)', color: t.up ? '#34d399' : '#fb7185', border: `1px solid ${t.up ? 'rgba(16,185,129,0.2)' : 'rgba(244,63,94,0.2)'}`, display: 'flex', alignItems: 'center', gap: '2px' }}>
-                    {t.up ? '▲' : '▼'} {t.change}
-                  </span>
-                </div>
-                <div className="price-display" style={{ fontSize: '1.3rem', marginTop: '0.5rem' }}>{t.price}</div>
-                <div className={`prediction-badge ${t.up ? 'up' : 'down'}`}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}><Sparkles className="w-3 h-3" /><span>AI Forecast</span></div>
-                  <span style={{ fontWeight: 800 }}>{t.up ? '+' : ''}{(parseFloat(t.change) * 0.9).toFixed(2)}%</span>
-                </div>
+          ))}
+
+          {/* Card content on top */}
+          <div style={{ position: 'relative', zIndex: 1 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
+              <div>
+                <h3 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '1.2rem', color: '#f0f6ff' }}>Sample Dashboard Preview</h3>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginTop: '0.25rem' }}>Sign in to see your personalized watchlist</p>
               </div>
-            ))}
+              <button className="btn-primary" onClick={onExplore} id="preview-get-started">Get Started <ArrowRight className="w-4 h-4" /></button>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '1rem' }}>
+              {TICKER_DATA.slice(0, 6).map((t, i) => (
+                <div key={i} className="stock-card">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <div>
+                      <span style={{ fontSize: '0.62rem', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase', background: 'rgba(255,255,255,0.05)', padding: '2px 6px', borderRadius: '4px' }}>
+                        {t.symbol.includes('.NS') ? 'NSE' : 'NASDAQ'}
+                      </span>
+                      <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 800, fontSize: '1rem', color: '#f0f6ff', marginTop: '0.35rem' }}>{t.symbol}</div>
+                    </div>
+                    <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '0.22rem 0.55rem', borderRadius: '6px', background: t.up ? 'rgba(16,185,129,0.1)' : 'rgba(244,63,94,0.1)', color: t.up ? '#34d399' : '#fb7185', border: `1px solid ${t.up ? 'rgba(16,185,129,0.2)' : 'rgba(244,63,94,0.2)'}`, display: 'flex', alignItems: 'center', gap: '2px' }}>
+                      {t.up ? '▲' : '▼'} {t.change}
+                    </span>
+                  </div>
+                  <div className="price-display" style={{ fontSize: '1.3rem', marginTop: '0.5rem' }}>{t.price}</div>
+                  <div className={`prediction-badge ${t.up ? 'up' : 'down'}`}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}><Sparkles className="w-3 h-3" /><span>AI Forecast</span></div>
+                    <span style={{ fontWeight: 800 }}>{t.up ? '+' : ''}{(parseFloat(t.change) * 0.9).toFixed(2)}%</span>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </section>
@@ -876,6 +643,11 @@ export default function HeroFuturistic({ onExplore }: HeroFuturisticProps) {
         }
         @keyframes heroContentFadeIn {
           from { opacity: 0; } to { opacity: 1; }
+        }
+        @keyframes floatCurrency {
+          0%, 100% { transform: translateY(0px) rotate(-5deg); opacity: 0.10; }
+          33% { transform: translateY(-18px) rotate(3deg); opacity: 0.16; }
+          66% { transform: translateY(-8px) rotate(-2deg); opacity: 0.13; }
         }
         .hero-fade-in {
           animation: heroContentFadeIn 0.6s ease-out both;
