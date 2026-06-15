@@ -1,72 +1,17 @@
-<!DOCTYPE html>
-<html lang="en" data-theme="dark">
-
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>StockTrack | Dashboard</title>
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>StockTrack | AI Stock Prediction & Watchlist Dashboard</title>
+    <meta name="description" content="AI-powered stock predictions and watchlist tracker using machine learning forecasts." />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css">
-</head>
-
-<body class="dashboard-page">
-    <nav class="navbar">
-        <div class="container">
-            <a class="nav-brand" href="index.html" aria-label="StockTrack dashboard">
-                Stock<span>Track</span>
-            </a>
-
-            <div class="nav-user">
-                <span id="userEmail" class="user-email">Loading...</span>
-                <button id="logoutButton" class="btn btn-outline btn-logout" type="button">Logout</button>
-            </div>
-        </div>
-    </nav>
-
-    <main class="dashboard-content">
-        <div class="container">
-            <section class="search-container" aria-labelledby="search-title">
-                <h1 id="search-title" class="dashboard-title">Track your stocks</h1>
-
-                <div class="search-bar">
-                    <svg class="search-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                        <path d="m21 21-4.35-4.35m2.35-5.15a7.5 7.5 0 1 1-15 0 7.5 7.5 0 0 1 15 0Z"
-                            stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-                    </svg>
-                    <input id="stockSearch" class="form-control" type="search" placeholder="Search stocks... (use .NS if not found)"
-                        autocomplete="off">
-                </div>
-                <div class="feature-banner" role="status" aria-live="polite">
-                    <svg class="mail-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true" stroke="currentColor"
-                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path
-                            d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                    </svg>
-                    <p><strong>Daily Summary:</strong> Get an automated email every day at 9 AM with a summary of the
-                        stocks in your watchlist.</p>
-                </div>
-            </section>
-
-            <section class="stocks-section" aria-labelledby="available-stocks-title">
-                <div class="section-header">
-                    <h2 id="available-stocks-title">Top Stocks</h2>
-                </div>
-                <div id="availableStocks" class="stock-grid"></div>
-            </section>
-
-            <section class="watchlist-section" aria-labelledby="watchlist-title">
-                <div class="section-header">
-                    <h2 id="watchlist-title">My Watchlist</h2>
-                </div>
-                <div id="stockList" class="stock-grid"></div>
-            </section>
-        </div>
-    </main>
-
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="script.js"></script>
-</body>
-
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;850;900&display=swap" rel="stylesheet">
+  </head>
+  <body class="bg-slate-950 text-slate-100 min-h-screen">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>

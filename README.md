@@ -90,29 +90,75 @@ Each user only sees and manages their own watchlist.
 
 ## Running & Deploying
 
-### Frontend
-1. The frontend is a static site. Open `auth.html` directly in a browser or serve it using a simple HTTP server (e.g. `npx serve frontend`).
-2. **For deployment:** Host the static files (e.g. on GitHub Pages, Netlify, or Vercel). In `frontend/script.js`, change the fallback in `BACKEND_URL` to point to your deployed backend URL.
+### 1. Supabase setup
 
-### Backend
-1. **Install Dependencies:**
-   ```bash
-   pip install -r backend/requirements.txt
-   ```
-2. **Configure Environment Variables:**
-   Copy `backend/.env.example` to `backend/.env` and fill in your values (or set them in your hosting platform like Render, Railway, or Fly.io). Stock endpoints work without Supabase; email summaries require all SMTP and Supabase variables.
-   - `SUPABASE_URL`: Your Supabase Project URL.
-   - `SUPABASE_KEY`: Your Supabase Anon/Publishable Key.
-   - `SUPABASE_SERVICE_ROLE_KEY`: Your Supabase Service Role Key (needed to query user email addresses for daily summaries).
-   - `SMTP_SERVER`: e.g. `smtp.gmail.com`
-   - `SMTP_PORT`: e.g. `587`
-   - `SMTP_EMAIL`: Your Gmail email address.
-   - `SMTP_PASSWORD`: Your Gmail App Password.
-3. **Run Locally:**
-   ```bash
-   python backend/main.py
-   ```
-   The backend will run on `http://localhost:8000`.
+1. Create a project at [supabase.com](https://supabase.com).
+2. Run `supabase/schema.sql` in **SQL Editor** to create the `watchlists` table and RLS policies.
+3. Under **Authentication → URL Configuration**, set **Site URL** to your deployed frontend URL and add it to **Redirect URLs**.
+4. Copy your project URL and anon/publishable key into `frontend/config.js`.
+
+### 2. Backend (Render / Railway / Fly.io)
+
+**One-click on Render:** Connect this repo and use the included `render.yaml` blueprint, then set the secret env vars in the Render dashboard.
+
+**Manual deploy:**
+
+```bash
+pip install -r backend/requirements.txt
+uvicorn backend.main:app --host 0.0.0.0 --port 8000
+```
+
+Copy `backend/.env.example` to `backend/.env` and fill in:
+
+| Variable | Required for | Notes |
+|----------|--------------|-------|
+| `SUPABASE_URL` | Email summaries | Same project as frontend |
+| `SUPABASE_KEY` | Email summaries | Anon/publishable key |
+| `SUPABASE_SERVICE_ROLE_KEY` | Email summaries | Needed to look up user emails |
+| `SMTP_*` | Email summaries | Gmail app password recommended |
+| `ALLOWED_ORIGINS` | Production | Your frontend URL, e.g. `https://stocktrack.netlify.app` |
+| `ADMIN_API_KEY` | Admin endpoints | Protects `/test-email` and `/trigger-daily-summary` |
+| `ENABLE_SCHEDULER` | Daily emails | Keep `true` on always-on hosts; use external cron + `/trigger-daily-summary` otherwise |
+
+Stock endpoints work without Supabase or SMTP.
+
+**Test admin endpoints** (after setting `ADMIN_API_KEY`):
+
+```bash
+curl -H "X-Admin-Key: your-key" "https://your-api.onrender.com/test-email?to=you@example.com"
+curl -X POST -H "X-Admin-Key: your-key" "https://your-api.onrender.com/trigger-daily-summary"
+```
+
+### 3. Frontend (Netlify / Vercel / GitHub Pages)
+
+1. Deploy the `frontend/` folder as a static site.
+   - **Netlify:** Connect the repo; `netlify.toml` is already configured.
+   - **GitHub Pages / others:** Set publish directory to `frontend`.
+2. Edit `frontend/config.js`:
+   - Set `BACKEND_URL` to your deployed API URL (e.g. `https://stocktrack-api.onrender.com`).
+   - Confirm `SUPABASE_URL` and `SUPABASE_KEY` match your project.
+3. Redeploy the frontend after updating `config.js`.
+
+See `frontend/config.example.js` for the template.
+
+### Local development
+
+**Frontend:** Open `frontend/auth.html` via a local server:
+
+```bash
+npx serve frontend
+```
+
+Leave `BACKEND_URL` empty in `config.js` — the app uses `http://localhost:8000` automatically.
+
+**Backend:**
+
+```bash
+pip install -r backend/requirements.txt
+python backend/main.py
+```
+
+Runs at `http://localhost:8000`. Use `ALLOWED_ORIGINS=*` (default) for local CORS.
 
 
 ## Machine Learning Features

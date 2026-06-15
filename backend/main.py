@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Query, BackgroundTasks
+from fastapi import FastAPI, Query, BackgroundTasks, Header, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 import yfinance as yf
 import pandas as pd
@@ -11,7 +11,6 @@ from email.mime.multipart import MIMEMultipart
 from apscheduler.schedulers.background import BackgroundScheduler
 import datetime
 import uvicorn
-import joblib
 
 # Load backend/.env regardless of which folder you run the command from
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
@@ -22,7 +21,15 @@ ML_DIR = os.path.join(BASE_DIR, "ml")
 if ML_DIR not in __import__("sys").path:
     __import__("sys").path.insert(0, ML_DIR)
 
-from features import load_model_bundle, predict_next_close, predict_all_trained_stocks  # noqa: E402
+from features import (  # noqa: E402
+    load_model_bundle,
+    predict_next_close,
+    predict_all_trained_stocks,
+    resolve_training_symbol,
+)
+from generate_data import generate_dataset  # noqa: E402
+from train_model import train_model  # noqa: E402
+from predict import run_all_predictions  # noqa: E402
 
 ml_bundle = None
 ml_model = None
@@ -41,13 +48,27 @@ else:
 
 app = FastAPI()
 
-# Enable CORS for frontend integration
+# CORS — set ALLOWED_ORIGINS to your frontend URL(s), comma-separated (e.g. https://stocktrack.netlify.app)
+_allowed_origins = os.getenv("ALLOWED_ORIGINS", "*")
+cors_origins = ["*"] if _allowed_origins.strip() == "*" else [
+    origin.strip() for origin in _allowed_origins.split(",") if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your frontend URL
+    allow_origins=cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+ADMIN_API_KEY = os.getenv("ADMIN_API_KEY")
+
+
+def verify_admin_key(x_admin_key: str | None = Header(default=None, alias="X-Admin-Key")):
+    if not ADMIN_API_KEY:
+        raise HTTPException(status_code=503, detail="Admin endpoints are disabled")
+    if x_admin_key != ADMIN_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid admin key")
 
 # Supabase Setup (optional for stock endpoints; required for daily email workflow)
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -74,16 +95,38 @@ SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 # List of "Top Stocks" to display on dashboard
 TOP_STOCKS_SYMBOLS = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "AAPL", "MSFT", "TSLA"]
 
+
+def symbol_candidates(symbol: str) -> list[str]:
+    raw = symbol.strip().upper()
+    if ml_trained_symbols:
+        resolved = resolve_training_symbol(raw, ml_trained_symbols)
+        if resolved:
+            return [resolved]
+    if "." in raw:
+        return [raw]
+    # NSE tickers need .NS — try that first so Yahoo doesn't error on bare names like RELIANCE
+    return [f"{raw}.NS", raw]
+
+
 def get_stock_info(symbol: str):
+    for candidate in symbol_candidates(symbol):
+        info = _fetch_stock_info(candidate)
+        if info:
+            return info
+    return None
+
+
+def _fetch_stock_info(symbol: str):
     try:
         stock = yf.Ticker(symbol)
-        # Fetching basic info
-        data = stock.history(period="1d")
+        data = stock.history(period="5d")
         if data.empty:
             return None
-            
+
         latest = data.iloc[-1]
-        prev_close = stock.info.get('previousClose') or (data.iloc[0]['Close'] if len(data) > 1 else latest['Close'])
+        prev_close = stock.info.get("previousClose") or (
+            float(data.iloc[-2]["Close"]) if len(data) > 1 else float(latest["Close"])
+        )
         
         prediction_data = None
         if ml_model is not None:
@@ -105,13 +148,141 @@ def get_stock_info(symbol: str):
 
         return {
             "symbol": symbol.replace(".NS", ""),
-            "price": float(latest['Close']),
+            "ticker": symbol,
+            "price": float(latest["Close"]),
             "previousClose": float(prev_close),
-            "prediction": prediction_data
+            "prediction": prediction_data,
         }
     except Exception as e:
         print(f"Error fetching {symbol}: {e}")
         return None
+
+
+def describe_trend(pct: float) -> str:
+    direction = "upward" if pct > 0 else "downward" if pct < 0 else "flat"
+    magnitude = abs(pct)
+    if magnitude < 0.15:
+        label = "Flat" if pct == 0 else "Marginal"
+    elif magnitude < 0.5:
+        label = "Slight"
+    elif magnitude < 1.0:
+        label = "Moderate"
+    else:
+        label = "Noticeable"
+    if label == "Flat":
+        return f"Flat ({pct:+.2f}%)"
+    return f"{label} {direction} ({pct:+.2f}%)"
+
+
+def forecast_insight(pct: float, today_pct: float) -> str:
+    if abs(pct) < 0.15:
+        return "Forecast is flat; price likely to hold near current levels with limited movement expected."
+    if pct > 0:
+        if today_pct >= 0:
+            return "Model predicts continued upside; momentum aligns with today's move."
+        return "Model predicts recovery despite today's dip; watch for early confirmation."
+    if today_pct <= 0:
+        return "Model predicts further softness; today's weakness may carry into the next session."
+    return "Model predicts a pullback after today's gain; consider taking profits selectively."
+
+
+def forecast_risk(pct: float) -> str:
+    magnitude = abs(pct)
+    if magnitude < 0.3:
+        return "Minimal; low expected volatility, routine monitoring is sufficient."
+    if magnitude < 0.8:
+        return "Low; regular volatility, monitor for continued movement in the forecast direction."
+    if magnitude < 1.5:
+        return "Moderate; larger expected swing, review position sizing and stop levels."
+    return "High; sharp forecast move, exercise caution and avoid impulsive trades."
+
+
+def portfolio_sentiment(forecast_pcts: list[float]) -> str:
+    if not forecast_pcts:
+        return "Insufficient data to assess portfolio sentiment today."
+    ups = sum(1 for p in forecast_pcts if p > 0.15)
+    downs = sum(1 for p in forecast_pcts if p < -0.15)
+    flat = len(forecast_pcts) - ups - downs
+    avg_move = sum(abs(p) for p in forecast_pcts) / len(forecast_pcts)
+
+    if ups > downs and downs == 0:
+        tone = "Constructive outlook with broad upward forecasts."
+    elif downs > ups and ups == 0:
+        tone = "Defensive outlook with broad downward forecasts."
+    elif ups > downs:
+        tone = "Cautiously optimistic with mixed signals leaning upward."
+    elif downs > ups:
+        tone = "Cautiously stable with minor declines dominating forecasts."
+    else:
+        tone = "Balanced outlook with offsetting up and down forecasts."
+
+    volatility = (
+        "Low expected volatility across holdings."
+        if avg_move < 0.4
+        else "Moderate forecast volatility; stay alert for sector-specific moves."
+        if avg_move < 1.0
+        else "Elevated forecast volatility; prioritize risk management."
+    )
+    flat_note = f" {flat} holding(s) look flat." if flat else ""
+    return f"{tone}{flat_note} {volatility}"
+
+
+def build_summary_email_body(watchlist: list) -> str:
+    lines = [
+        "Here is your daily stock watchlist forecast summary:",
+        "",
+    ]
+    forecast_pcts: list[float] = []
+    seen_symbols: set[str] = set()
+
+    for item in watchlist:
+        raw_symbol = item["stock_symbol"]
+        if raw_symbol in seen_symbols:
+            continue
+        seen_symbols.add(raw_symbol)
+
+        info = get_stock_info(raw_symbol)
+        if not info:
+            lines.extend([f"📈 {raw_symbol.upper()}", "Status: Price data unavailable.", ""])
+            continue
+
+        today_change = info["price"] - info["previousClose"]
+        today_pct = (today_change / info["previousClose"]) * 100 if info["previousClose"] else 0.0
+        ticker = info.get("ticker", raw_symbol.upper())
+        currency = "Rs." if ticker.endswith(".NS") else "$"
+
+        lines.append(f"📈 {ticker}")
+        lines.append(
+            f"Price: {currency} {info['price']:.2f} (today: {today_change:+.2f}, {today_pct:+.2f}%)"
+        )
+
+        prediction = info.get("prediction")
+        if prediction:
+            forecast_pct = prediction["percentChange"]
+            forecast_pcts.append(forecast_pct)
+            arrow = "▲" if prediction["direction"] == "UP" else "▼"
+            lines.append(
+                f"Forecast: {currency} {prediction['predictedClose']:.2f} "
+                f"({arrow} {forecast_pct:+.2f}%)"
+            )
+            lines.append(f"Trend: {describe_trend(forecast_pct)}")
+            lines.append(f"Insight: {forecast_insight(forecast_pct, today_pct)}")
+            lines.append(f"Risk: {forecast_risk(forecast_pct)}")
+        else:
+            forecast_pcts.append(today_pct)
+            lines.append("Forecast: unavailable for this symbol.")
+            lines.append(f"Trend: {describe_trend(today_pct)} (based on today's move)")
+            lines.append(f"Insight: {forecast_insight(today_pct, today_pct)}")
+            lines.append(f"Risk: {forecast_risk(today_pct)}")
+        lines.append("")
+
+    lines.extend([
+        "📊 Overall Portfolio Sentiment:",
+        portfolio_sentiment(forecast_pcts),
+        "",
+        "— StockTrack",
+    ])
+    return "\n".join(lines)
 
 @app.get("/")
 async def root():
@@ -124,7 +295,7 @@ async def root():
             "search": "/search-stock?q=RELIANCE",
             "all_predictions": "/predictions",
         },
-        "frontend": "Serve frontend/ and open auth.html (not this port)",
+        "frontend": "Run the Vite app in frontend/ (npm run dev)",
         "trained_symbols": len(ml_trained_symbols),
     }
 
@@ -180,7 +351,7 @@ async def search_stock(q: str = Query(...)):
         return [info] if info else []
 
 @app.get("/test-email")
-async def test_email(to: str = Query(...)):
+async def test_email(to: str = Query(...), _: None = Depends(verify_admin_key)):
     """Trigger a test email to verify SMTP settings."""
     try:
         msg = MIMEMultipart()
@@ -199,8 +370,14 @@ async def test_email(to: str = Query(...)):
         print(f"SMTP Error: {e}")
         return {"status": "error", "message": str(e)}
 
+@app.post("/trigger-ml-pipeline")
+async def trigger_ml_pipeline_endpoint(background_tasks: BackgroundTasks, _: None = Depends(verify_admin_key)):
+    """Trigger the ML pipeline workflow immediately in the background."""
+    background_tasks.add_task(run_ml_pipeline)
+    return {"status": "success", "message": "ML pipeline triggered in the background."}
+
 @app.post("/trigger-daily-summary")
-async def trigger_daily_summary(background_tasks: BackgroundTasks):
+async def trigger_daily_summary(background_tasks: BackgroundTasks, _: None = Depends(verify_admin_key)):
     """Trigger the daily summary email workflow immediately in the background."""
     background_tasks.add_task(daily_workflow)
     return {"status": "success", "message": "Daily summary email workflow triggered in the background."}
@@ -213,17 +390,10 @@ def send_email_summary(to_email: str, watchlist: list):
     msg = MIMEMultipart()
     msg['From'] = SMTP_EMAIL
     msg['To'] = to_email
-    msg['Subject'] = f"Daily Stock Summary - {datetime.date.today()}"
+    msg['Subject'] = f"Daily Stock Forecast Summary - {datetime.date.today()}"
 
-    body = "Here is your daily stock watchlist summary:\n\n"
-    for item in watchlist:
-        info = get_stock_info(item['stock_symbol'])
-        if info:
-            change = info['price'] - info['previousClose']
-            percent = (change / info['previousClose']) * 100
-            body += f"{info['symbol']}: Rs. {info['price']:.2f} ({change:+.2f}, {percent:+.2f}%)\n"
-    
-    msg.attach(MIMEText(body, 'plain'))
+    body = build_summary_email_body(watchlist)
+    msg.attach(MIMEText(body, "plain", "utf-8"))
 
     try:
         server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
@@ -234,6 +404,27 @@ def send_email_summary(to_email: str, watchlist: list):
         print(f"Summary sent to {to_email}")
     except Exception as e:
         print(f"Failed to send email: {e}")
+
+def run_ml_pipeline():
+    print("Running scheduled ML pipeline: generate_data")
+    try:
+        generate_dataset()
+        print("Running scheduled ML pipeline: train_model")
+        train_model()
+        print("Running scheduled ML pipeline: predict")
+        run_all_predictions()
+        
+        # Reload the model in memory for the fastAPI app
+        global ml_bundle, ml_model, ml_feature_columns, ml_trained_symbols
+        _loaded = load_model_bundle()
+        if _loaded:
+            ml_bundle = _loaded
+            ml_model = _loaded["model"]
+            ml_feature_columns = _loaded["feature_columns"]
+            ml_trained_symbols = set(_loaded["trained_symbols"])
+            print("Reloaded ML model into memory.")
+    except Exception as e:
+        print(f"Error in ML pipeline: {e}")
 
 def daily_workflow():
     print("Running daily summary workflow...")
@@ -261,20 +452,15 @@ def daily_workflow():
             email = None
             if supabase_admin:
                 try:
-                    user_info = supabase_admin.auth.admin.get_user(uid)
-                    if hasattr(user_info, 'user') and hasattr(user_info.user, 'email'):
-                        email = user_info.user.email
-                    elif isinstance(user_info, dict) and 'user' in user_info:
-                        email = user_info['user'].get('email')
-                    else:
-                        email = getattr(user_info, 'email', None)
+                    user_response = supabase_admin.auth.admin.get_user_by_id(uid)
+                    if user_response.user and user_response.user.email:
+                        email = user_response.user.email
                 except Exception as admin_err:
                     print(f"Error fetching user email for {uid}: {admin_err}")
-            
-            # Fallback to SMTP_EMAIL for testing if we cannot retrieve user's email
-            if not email:
+
+            if not email and SMTP_EMAIL:
                 email = SMTP_EMAIL
-                print(f"No email found for {uid} (requires SUPABASE_SERVICE_ROLE_KEY). Falling back to default SMTP email {email} for testing.")
+                print(f"No email found for {uid}. Falling back to SMTP email {email}.")
             
             if email:
                 send_email_summary(email, watchlist)
@@ -282,10 +468,13 @@ def daily_workflow():
     except Exception as e:
         print(f"Error in daily workflow: {e}")
 
-# Schedule the daily summary at 9:00 AM
+# Schedule the daily summary at 9:00 AM (disable with ENABLE_SCHEDULER=false on serverless hosts)
 scheduler = BackgroundScheduler()
-scheduler.add_job(daily_workflow, 'cron', hour=9, minute=0)
-scheduler.start()
+scheduler.add_job(run_ml_pipeline, "cron", hour=8, minute=0)
+scheduler.add_job(daily_workflow, "cron", hour=8, minute=30)
+if os.getenv("ENABLE_SCHEDULER", "true").lower() in ("1", "true", "yes"):
+    scheduler.start()
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
