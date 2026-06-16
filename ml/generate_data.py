@@ -7,6 +7,53 @@ ML_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ML_DIR)
 from symbols import TRAINING_SYMBOLS
 
+CHUNK_SIZE = 10
+
+
+def _download_chunk(symbols: list[str]) -> pd.DataFrame:
+    try:
+        data = yf.download(
+            tickers=" ".join(symbols),
+            period="2y",
+            group_by="ticker",
+            auto_adjust=False,
+            threads=False,
+            progress=False,
+        )
+    except Exception:
+        return pd.DataFrame()
+
+    rows = []
+    if data is None or data.empty:
+        return pd.DataFrame()
+
+    for symbol in symbols:
+        try:
+            if isinstance(data.columns, pd.MultiIndex):
+                o = data.get(("Open", symbol))
+                h = data.get(("High", symbol))
+                l = data.get(("Low", symbol))
+                c = data.get(("Close", symbol))
+                v = data.get(("Volume", symbol))
+                if any(series is None for series in [o, h, l, c, v]):
+                    continue
+                df = pd.DataFrame({"Open": o, "High": h, "Low": l, "Close": c, "Volume": v})
+            else:
+                df = data[["Open", "High", "Low", "Close", "Volume"]].copy()
+
+            df = df.dropna().reset_index()
+            if df.empty:
+                continue
+            df["Symbol"] = symbol.upper()
+            rows.append(df)
+        except Exception:
+            continue
+
+    if not rows:
+        return pd.DataFrame()
+    return pd.concat(rows, ignore_index=True)
+
+
 def generate_dataset():
     symbols = TRAINING_SYMBOLS
     print(f"Fetching historical data for {len(symbols)} stocks (US + India)...")
@@ -14,24 +61,23 @@ def generate_dataset():
 
     all_data = []
     failed = []
+    for i in range(0, len(symbols), CHUNK_SIZE):
+        chunk = symbols[i : i + CHUNK_SIZE]
+        df_chunk = _download_chunk(chunk)
+        if df_chunk.empty:
+            failed.extend(chunk)
+            print(f"  [err]  chunk {i // CHUNK_SIZE + 1}: no data for {', '.join(chunk)}")
+            continue
 
-    for symbol in symbols:
-        try:
-            stock = yf.Ticker(symbol)
-            df = stock.history(period="2y")
-
-            if df.empty:
-                print(f"  [skip] No data for {symbol}")
-                failed.append(symbol)
-                continue
-
-            df["Symbol"] = symbol.upper()
-            df = df.reset_index()
-            all_data.append(df)
-            print(f"  [ok]   {symbol}: {len(df)} rows")
-        except Exception as e:
-            print(f"  [err]  {symbol}: {e}")
-            failed.append(symbol)
+        all_data.append(df_chunk)
+        present = set(df_chunk["Symbol"].unique())
+        for sym in chunk:
+            if sym.upper() in present:
+                count = int((df_chunk["Symbol"] == sym.upper()).sum())
+                print(f"  [ok]   {sym}: {count} rows")
+            else:
+                print(f"  [skip] No data for {sym}")
+                failed.append(sym)
 
     if not all_data:
         print("No data fetched. Exiting.")

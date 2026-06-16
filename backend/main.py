@@ -140,11 +140,9 @@ def _fetch_stock_info(symbol: str):
             return None
 
         latest = data.iloc[-1]
-        prev_close = stock.info.get("previousClose")
-        if prev_close is None and len(data) > 1:
-            prev_close = data.iloc[-2]["Close"]
-        if prev_close is None:
-            prev_close = latest["Close"]
+        # Avoid stock.info here because it triggers additional Yahoo API calls
+        # and is a frequent source of rate-limit failures on shared hosting.
+        prev_close = data.iloc[-2]["Close"] if len(data) > 1 else latest["Close"]
 
         def safe_float(value):
             try:

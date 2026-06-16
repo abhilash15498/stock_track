@@ -125,15 +125,42 @@ def predict_all_trained_stocks(bundle: dict | None = None) -> list[dict]:
     feature_rows = []
     row_meta = []
 
+    try:
+        # Batch pull recent OHLCV for all trained symbols to reduce rate limits.
+        batch = yf.download(
+            tickers=" ".join(symbols),
+            period="5d",
+            group_by="ticker",
+            auto_adjust=False,
+            threads=False,
+            progress=False,
+        )
+    except Exception:
+        return []
+
     for symbol in symbols:
         try:
-            df = yf.Ticker(symbol).history(period="5d")
+            if isinstance(batch.columns, pd.MultiIndex):
+                close = batch.get(("Close", symbol))
+                open_ = batch.get(("Open", symbol))
+                high = batch.get(("High", symbol))
+                low = batch.get(("Low", symbol))
+                volume = batch.get(("Volume", symbol))
+                if any(series is None for series in [open_, high, low, close, volume]):
+                    continue
+                df = pd.DataFrame(
+                    {"Open": open_, "High": high, "Low": low, "Close": close, "Volume": volume}
+                )
+            else:
+                # Single symbol edge case.
+                df = batch[BASE_FEATURES].copy() if set(BASE_FEATURES).issubset(batch.columns) else pd.DataFrame()
+
+            df = df.dropna()
             if df.empty:
                 continue
+
             latest = df[BASE_FEATURES].iloc[-1]
-            feature_rows.append(
-                build_prediction_features(latest, symbol, feature_columns)
-            )
+            feature_rows.append(build_prediction_features(latest, symbol, feature_columns))
             row_meta.append((symbol, float(df["Close"].iloc[-1])))
         except Exception:
             continue
