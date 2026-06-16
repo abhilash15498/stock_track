@@ -243,7 +243,7 @@ export default function App() {
     if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
     searchDebounceRef.current = setTimeout(() => {
       const query = val.trim();
-      if (query) searchStocks(query);
+      if (query.length >= 2) searchStocks(query);
       else setSearchResults(null);
     }, 400);
   };

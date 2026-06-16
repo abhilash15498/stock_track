@@ -99,6 +99,8 @@ TOP_STOCKS_SYMBOLS = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIB
 
 _top_stocks_cache: dict[str, object] = {"ts": 0.0, "data": []}
 _TOP_STOCKS_CACHE_SECONDS = int(os.getenv("TOP_STOCKS_CACHE_SECONDS", "90"))
+_stock_info_cache: dict[str, dict[str, object]] = {}
+_STOCK_INFO_CACHE_SECONDS = int(os.getenv("STOCK_INFO_CACHE_SECONDS", "180"))
 
 
 def symbol_candidates(symbol: str) -> list[str]:
@@ -122,10 +124,19 @@ def get_stock_info(symbol: str):
 
 
 def _fetch_stock_info(symbol: str):
+    normalized_symbol = symbol.strip().upper()
+    now = time.time()
+    cached = _stock_info_cache.get(normalized_symbol)
+    if cached:
+        cached_ts = float(cached.get("ts", 0.0) or 0.0)
+        if (now - cached_ts) < _STOCK_INFO_CACHE_SECONDS:
+            return cached.get("data")
+
     try:
         stock = yf.Ticker(symbol)
         data = stock.history(period="5d")
         if data.empty:
+            _stock_info_cache[normalized_symbol] = {"ts": now, "data": None}
             return None
 
         latest = data.iloc[-1]
@@ -167,15 +178,18 @@ def _fetch_stock_info(symbol: str):
             except Exception as pred_err:
                 print(f"Prediction failed for {symbol}: {pred_err}")
 
-        return {
+        payload = {
             "symbol": symbol.replace(".NS", ""),
             "ticker": symbol,
             "price": current_price,
             "previousClose": previous_close,
             "prediction": prediction_data,
         }
+        _stock_info_cache[normalized_symbol] = {"ts": now, "data": payload}
+        return payload
     except Exception as e:
         print(f"Error fetching {symbol}: {e}")
+        _stock_info_cache[normalized_symbol] = {"ts": now, "data": None}
         return None
 
 
@@ -407,6 +421,10 @@ async def get_top_stocks():
 
 @app.get("/search-stock")
 async def search_stock(q: str = Query(...)):
+    q = q.strip()
+    if len(q) < 2:
+        return []
+
     # Try using yfinance Search to look up quotes by name/partial symbol
     try:
         search = yf.Search(q, max_results=5)
