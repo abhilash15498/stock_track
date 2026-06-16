@@ -11,6 +11,7 @@ from email.mime.multipart import MIMEMultipart
 from apscheduler.schedulers.background import BackgroundScheduler
 import datetime
 import uvicorn
+import math
 
 # Load backend/.env regardless of which folder you run the command from
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
@@ -124,9 +125,25 @@ def _fetch_stock_info(symbol: str):
             return None
 
         latest = data.iloc[-1]
-        prev_close = stock.info.get("previousClose") or (
-            float(data.iloc[-2]["Close"]) if len(data) > 1 else float(latest["Close"])
-        )
+        prev_close = stock.info.get("previousClose")
+        if prev_close is None and len(data) > 1:
+            prev_close = data.iloc[-2]["Close"]
+        if prev_close is None:
+            prev_close = latest["Close"]
+
+        def safe_float(value):
+            try:
+                num = float(value)
+                return num if math.isfinite(num) else None
+            except (TypeError, ValueError):
+                return None
+
+        current_price = safe_float(latest["Close"])
+        previous_close = safe_float(prev_close)
+        if current_price is None:
+            return None
+        if previous_close is None:
+            previous_close = current_price
         
         prediction_data = None
         if ml_model is not None:
@@ -134,8 +151,8 @@ def _fetch_stock_info(symbol: str):
                 pred_price = predict_next_close(
                     ml_model, data, symbol, ml_feature_columns, ml_trained_symbols
                 )
+                pred_price = safe_float(pred_price)
                 if pred_price is not None:
-                    current_price = float(latest['Close'])
                     change = pred_price - current_price
                     pct_change = (change / current_price) * 100 if current_price != 0 else 0.0
                     prediction_data = {
@@ -149,8 +166,8 @@ def _fetch_stock_info(symbol: str):
         return {
             "symbol": symbol.replace(".NS", ""),
             "ticker": symbol,
-            "price": float(latest["Close"]),
-            "previousClose": float(prev_close),
+            "price": current_price,
+            "previousClose": previous_close,
             "prediction": prediction_data,
         }
     except Exception as e:
