@@ -12,6 +12,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import datetime
 import uvicorn
 import math
+import time
 
 # Load backend/.env regardless of which folder you run the command from
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
@@ -96,6 +97,9 @@ SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 # List of "Top Stocks" to display on dashboard
 TOP_STOCKS_SYMBOLS = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "AAPL", "MSFT", "TSLA"]
 
+_top_stocks_cache: dict[str, object] = {"ts": 0.0, "data": []}
+_TOP_STOCKS_CACHE_SECONDS = int(os.getenv("TOP_STOCKS_CACHE_SECONDS", "90"))
+
 
 def symbol_candidates(symbol: str) -> list[str]:
     raw = symbol.strip().upper()
@@ -173,6 +177,37 @@ def _fetch_stock_info(symbol: str):
     except Exception as e:
         print(f"Error fetching {symbol}: {e}")
         return None
+
+
+def _parse_download_close(df: pd.DataFrame, ticker: str):
+    """
+    yfinance download() returns either:
+      - single-ticker columns: ['Open','High','Low','Close',...]
+      - multi-ticker columns: MultiIndex [(field, ticker)]
+    This helper extracts last and previous Close for one ticker.
+    """
+    try:
+        if df is None or df.empty:
+            return None, None
+
+        if isinstance(df.columns, pd.MultiIndex):
+            close = df.get(("Close", ticker))
+            if close is None:
+                return None, None
+        else:
+            close = df.get("Close")
+            if close is None:
+                return None, None
+
+        close = close.dropna()
+        if close.empty:
+            return None, None
+
+        last = close.iloc[-1]
+        prev = close.iloc[-2] if len(close) > 1 else last
+        return float(last), float(prev)
+    except Exception:
+        return None, None
 
 
 def describe_trend(pct: float) -> str:
@@ -327,11 +362,47 @@ async def get_all_predictions():
 
 @app.get("/top-stocks")
 async def get_top_stocks():
+    # Avoid hammering Yahoo Finance from a shared Render IP.
+    now = time.time()
+    cached_ts = float(_top_stocks_cache.get("ts", 0.0) or 0.0)
+    cached_data = _top_stocks_cache.get("data", [])
+    if (now - cached_ts) < _TOP_STOCKS_CACHE_SECONDS and isinstance(cached_data, list):
+        return cached_data
+
+    tickers = TOP_STOCKS_SYMBOLS
+    try:
+        # One batch call instead of N separate ticker calls (helps prevent rate limiting).
+        df = yf.download(
+            tickers=" ".join(tickers),
+            period="5d",
+            group_by="ticker",
+            auto_adjust=False,
+            threads=False,
+            progress=False,
+        )
+    except Exception as e:
+        print(f"Batch download failed: {e}")
+        if isinstance(cached_data, list) and cached_data:
+            return cached_data
+        return []
+
     results = []
-    for symbol in TOP_STOCKS_SYMBOLS:
-        info = get_stock_info(symbol)
-        if info:
-            results.append(info)
+    for ticker in tickers:
+        last, prev = _parse_download_close(df, ticker)
+        if last is None:
+            continue
+        results.append(
+            {
+                "symbol": ticker.replace(".NS", ""),
+                "ticker": ticker,
+                "price": last,
+                "previousClose": prev if prev is not None else last,
+                "prediction": None,
+            }
+        )
+
+    _top_stocks_cache["ts"] = now
+    _top_stocks_cache["data"] = results
     return results
 
 @app.get("/search-stock")
