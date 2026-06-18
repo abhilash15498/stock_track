@@ -30,11 +30,22 @@ def _download_chunk(symbols: list[str]) -> pd.DataFrame:
     for symbol in symbols:
         try:
             if isinstance(data.columns, pd.MultiIndex):
+                # yfinance may use (field, ticker) or (ticker, field)
                 o = data.get(("Open", symbol))
+                if o is None:
+                    o = data.get((symbol, "Open"))
                 h = data.get(("High", symbol))
+                if h is None:
+                    h = data.get((symbol, "High"))
                 l = data.get(("Low", symbol))
+                if l is None:
+                    l = data.get((symbol, "Low"))
                 c = data.get(("Close", symbol))
+                if c is None:
+                    c = data.get((symbol, "Close"))
                 v = data.get(("Volume", symbol))
+                if v is None:
+                    v = data.get((symbol, "Volume"))
                 if any(series is None for series in [o, h, l, c, v]):
                     continue
                 df = pd.DataFrame({"Open": o, "High": h, "Low": l, "Close": c, "Volume": v})

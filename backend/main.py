@@ -203,7 +203,10 @@ def _parse_download_close(df: pd.DataFrame, ticker: str):
             return None, None
 
         if isinstance(df.columns, pd.MultiIndex):
+            # yfinance may return either (field, ticker) or (ticker, field)
             close = df.get(("Close", ticker))
+            if close is None:
+                close = df.get((ticker, "Close"))
             if close is None:
                 return None, None
         else:

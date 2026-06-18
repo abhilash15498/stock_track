@@ -141,11 +141,22 @@ def predict_all_trained_stocks(bundle: dict | None = None) -> list[dict]:
     for symbol in symbols:
         try:
             if isinstance(batch.columns, pd.MultiIndex):
+                # yfinance may use (field, ticker) or (ticker, field)
                 close = batch.get(("Close", symbol))
+                if close is None:
+                    close = batch.get((symbol, "Close"))
                 open_ = batch.get(("Open", symbol))
+                if open_ is None:
+                    open_ = batch.get((symbol, "Open"))
                 high = batch.get(("High", symbol))
+                if high is None:
+                    high = batch.get((symbol, "High"))
                 low = batch.get(("Low", symbol))
+                if low is None:
+                    low = batch.get((symbol, "Low"))
                 volume = batch.get(("Volume", symbol))
+                if volume is None:
+                    volume = batch.get((symbol, "Volume"))
                 if any(series is None for series in [open_, high, low, close, volume]):
                     continue
                 df = pd.DataFrame(
